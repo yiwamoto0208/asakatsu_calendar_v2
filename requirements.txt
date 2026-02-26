@@ -1,0 +1,7 @@
+streamlit==1.41.1
+
+firebase-admin
+
+pandas==2.3.3
+
+python-dateutil==2.9.0.post0
