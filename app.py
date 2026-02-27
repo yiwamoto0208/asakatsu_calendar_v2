@@ -1,7 +1,7 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import calendar
 import pandas as pd
@@ -16,6 +16,9 @@ st.set_page_config(
 
 # --- 定数定義 ---
 # Firestoreのルールに従い、パスを要素1つのシンプルなものに変更
+# 日本時間のタイムゾーンを設定（UTC+9時間）
+JST = timezone(timedelta(hours=+9), 'JST')
+
 EVENTS_COLLECTION = "v2_events"
 DAY_STATUS_COLLECTION = "v2_day_status"
 MONTH_LOCKS_COLLECTION = "v2_month_locks"
@@ -55,7 +58,8 @@ if not db:
 
 # --- セッション状態の初期化 ---
 if 'current_date' not in st.session_state:
-    st.session_state.current_date = datetime.now()
+    # 基準日を日本時間で取得する
+    st.session_state.current_date = datetime.now(JST)
 if 'admin_mode' not in st.session_state:
     st.session_state.admin_mode = False
 if 'user_name' not in st.session_state:
@@ -91,7 +95,8 @@ def get_firestore_data(year, month):
 
 def cleanup_old_board_messages():
     """投稿から2週間以上経過した掲示板メッセージを削除する"""
-    two_weeks_ago = datetime.now() - timedelta(weeks=2)
+    # 2週間前も日本時間基準で計算する
+    two_weeks_ago = datetime.now(JST) - timedelta(weeks=2)
     old_messages_query = db.collection(BOARD_COLLECTION).where('timestamp', '<', two_weeks_ago).stream()
     
     batch = db.batch()
@@ -152,6 +157,47 @@ def show_welcome_and_name_input():
 def show_main_app():
     """メインのアプリケーションUIを表示する"""
     st.success(f"**{st.session_state.user_name}** さん（{st.session_state.user_attribute}）、こんにちは！")
+    
+    # --- 追加: 24時間以内の掲示板書き込みアラート ---
+    year = st.session_state.current_date.year
+    month = st.session_state.current_date.month
+    _, _, _, board_messages = get_firestore_data(year, month)
+    
+    now_jst = datetime.now(JST)
+    twenty_four_hours_ago = now_jst - timedelta(hours=24)
+    
+    recent_count = 0
+    for msg in board_messages:
+        ts = msg.get('timestamp')
+        if ts and hasattr(ts, 'astimezone'):
+            msg_time = ts.astimezone(JST)
+            if msg_time >= twenty_four_hours_ago:
+                recent_count += 1
+                
+    if recent_count > 0:
+        alert_html = f"""
+        <div style="
+            padding: 15px;
+            background-color: #fff0f0;
+            border: 2px solid #ff4b4b;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            animation: pulse 2s infinite;
+        ">
+            <h4 style="color: #ff4b4b; margin: 0; font-weight: bold;">🚨 緊急連絡掲示板に24時間以内の新しい書き込みが {recent_count}件 あります！</h4>
+            <p style="color: #ff4b4b; margin: 5px 0 0 0;">画面下部を必ずご確認ください。</p>
+        </div>
+        <style>
+        @keyframes pulse {{
+            0% {{ box-shadow: 0 0 0 0 rgba(255, 75, 75, 0.7); }}
+            70% {{ box-shadow: 0 0 0 15px rgba(255, 75, 75, 0); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(255, 75, 75, 0); }}
+        }}
+        </style>
+        """
+        st.markdown(alert_html, unsafe_allow_html=True)
+    # ----------------------------------------------
     
     with st.expander("📖 かんたんな使い方", expanded=False):
         st.markdown(f"""
@@ -369,7 +415,12 @@ def show_board_and_info():
         
         for msg in board_messages:
             ts = msg.get('timestamp')
-            timestamp_str = ts.strftime('%Y-%m-%d %H:%M') if ts and hasattr(ts, 'strftime') else "時刻不明"
+            # Firestoreのタイムスタンプを日本時間(JST)に変換して表示
+            if ts and hasattr(ts, 'astimezone'):
+                timestamp_str = ts.astimezone(JST).strftime('%Y-%m-%d %H:%M')
+            else:
+                timestamp_str = "時刻不明"
+            
             st.markdown(f"""
             <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; margin-bottom: 8px;">
                 <p style="margin: 0;"><strong>{msg.get('name')}</strong> <small>({timestamp_str})</small></p>
